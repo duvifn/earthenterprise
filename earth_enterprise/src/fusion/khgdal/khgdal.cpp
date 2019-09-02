@@ -94,8 +94,7 @@ GetMercatorProjString(void) {
 
 bool IsMercator(const char* projectionReference) {
   OGRSpatialReference srs;
-  char* wkt = const_cast<char*>(projectionReference);
-  srs.importFromWkt(&wkt);
+  srs.importFromWkt(projectionReference);
   return GetMercatorOGRSpatialReference().IsSame(&srs);
 }
 
@@ -333,7 +332,7 @@ InterpretSRSString(const std::string &buf, OGRSpatialReference &ogrSRS)
     // this copies and makes sure it's nul terminated
     std::string tmp = buf.c_str();
     char *wkt = &tmp[0];
-    err = ogrSRS.importFromWkt(&wkt);
+    err = ogrSRS.importFromWkt(wkt);
   } else {
     err = ogrSRS.SetFromUserInput(buf.c_str());
   }

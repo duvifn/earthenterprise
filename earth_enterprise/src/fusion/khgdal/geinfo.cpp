@@ -564,7 +564,7 @@ int main( int argc, char ** argv )
     std::string srsStr = dataset->GetProjectionRef();
     if (srsStr.size()) {
       const char *wkt = srsStr.c_str();
-      if ((tmpSRS.importFromWkt((char**)&wkt) == OGRERR_NONE) &&
+      if ((tmpSRS.importFromWkt(wkt) == OGRERR_NONE) &&
           tmpSRS.GetRoot()) {
         srs = &tmpSRS;
       }

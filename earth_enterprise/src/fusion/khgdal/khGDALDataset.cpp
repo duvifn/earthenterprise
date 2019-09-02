@@ -261,7 +261,7 @@ khGDALDatasetImpl::EnsureKeyholeNormalizedInfo(void)
     }
     OGRSpatialReference ogrSRS;
     const char *wkt = srs.c_str();
-    if ((ogrSRS.importFromWkt((char**)&wkt) != OGRERR_NONE) ||
+    if ((ogrSRS.importFromWkt(wkt) != OGRERR_NONE) ||
         !ogrSRS.GetRoot()) {
       throw khException(kh::tr("Internal Error: Unrecognized SRS"));
     }
