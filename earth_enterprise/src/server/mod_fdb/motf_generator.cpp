@@ -129,7 +129,7 @@ void CreateDstTransform(const MotfParams &motf_params,
                                src_srs);  // Add Source SRS.
   srs_tokens = CSLSetNameValue(srs_tokens, "DST_SRS",
                                *dst_srs);  // Add Dest SRS.
-  OGRFree(src_srs);
+  CPLFree(src_srs);
   // Define Destination dataset bounds.
   void *transform_arg;
   double geo_transform[6];
@@ -300,7 +300,7 @@ GDALDataset* GetSrcTile(const MotfParams &motf_params,
   GDALDataset* hsrc_ds = static_cast<GDALDataset*>(GDALCreateCopy(
       hdriver, "", static_cast<GDALDatasetH>(pvrt_ds), bStrict, NULL, NULL,
       NULL));
-  OGRFree(src_srs);
+  CPLFree(src_srs);
   GDALClose((GDALDatasetH) pvrt_ds);
   GDALClose(hdata_ds);
   VSIUnlink(vsidatafile.c_str());
@@ -482,7 +482,7 @@ void WarpData(const MotfParams &motf_params, int levelup,
   CPLFree(membuf);
   GDALClose(hdst_ds);
   GDALClose(hdst1_ds);
-  OGRFree(dst_srs);
+  CPLFree(dst_srs);
   CSLDestroy(warp_options);
   GDALDestroyWarpOptions(gdal_warp);
   GDALClose(hsrctile1_ds);

@@ -166,7 +166,7 @@ int main(int argc, char *argv[]) {
   }
   write(fd, "\n", 1);
 
-  OGRFree(wkt);
+  CPLFree(wkt);
 
   close(fd);
 }
