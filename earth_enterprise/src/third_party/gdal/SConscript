@@ -199,9 +199,16 @@ Default(gdal_install_build)
 if 'install' in COMMAND_LINE_TARGETS:
   # Copies gdal python bindings from ../install/lib/python2.7/site-packages
   # to ../opt/google/gepython/../site-packages/ folder.
+  # On debian use different path. see:
+  # https://github.com/OSGeo/gdal/blob/e40eb197cd9235fca7df4f3d927b8fa538cd8983/gdal/swig/python/GNUmakefile#L108
+  from distutils.sysconfig import get_python_lib
+  if 'dist-packages' in get_python_lib():
+    source_package_dir = 'dist-packages'
+  else:
+    source_package_dir = 'site-packages'
   gdal_env.InstallFileOrDir(
-      '%s/lib/python%s/site-packages/' % (install_root,
-                                          gdal_env['python_major_version']),
+      '%s/lib/python%s/%s/' % (install_root,
+                                          gdal_env['python_major_version'], source_package_dir),
       '%s/opt/google/gepython/Python-%s/lib/python%s/site-packages' % (
           gdal_env.installdirs['common_root'], gdal_env['python_version'],
           gdal_env['python_major_version']),
