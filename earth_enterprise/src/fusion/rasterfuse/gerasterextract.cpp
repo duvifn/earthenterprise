@@ -92,7 +92,6 @@ int main(int argc, char *argv[]) {
     notify(NFY_FATAL, "Unable to open %s as a Keyhole Raster Product",
            rasterfile.c_str());
   }
-  khDeleteGuard<khRasterProduct> deleteGuard(TransferOwnership(inRP));
 
   // validate the level and reflevel options
   if (level == 0) {
