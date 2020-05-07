@@ -24,6 +24,28 @@
 #include "fusion/autoingest/MiscConfig.h"
 #include "common/khFileUtils.h"
 #include "StorageManager.h"
+#include "CacheSizeCalculations.h"
+
+// Used by child classes of AssetVersionImpl
+class StateChangeException : public khException {
+ public:
+  const std::string location;
+  StateChangeException(const std::string & msg, const std::string & loc) :
+    khException(msg), location(loc) {}
+};
+
+// Helper structs for passing data about input and child states.
+struct WaitingFor {
+  uint32 inputs;
+  uint32 children;
+};
+
+struct InputAndChildStateData {
+  AssetDefs::State stateByInputs;
+  AssetDefs::State stateByChildren;
+  bool blockersAreOffline;
+  WaitingFor waitingFor;
+};
 
 /******************************************************************************
  ***  AssetVersionImpl
@@ -39,7 +61,7 @@
  ***     ... = ver->config.layers.size();
  ***  }
  ******************************************************************************/
-class AssetVersionImpl : public khRefCounter, public AssetVersionStorage, public StorageManaged {
+class AssetVersionImpl : public AssetVersionStorage, public StorageManaged {
   friend class AssetImpl;
   friend class AssetHandle_<AssetVersionImpl>;
 
@@ -50,19 +72,25 @@ class AssetVersionImpl : public khRefCounter, public AssetVersionStorage, public
   AssetVersionImpl& operator=(const AssetVersionImpl&&) = delete;
 
  public:
+  static std::string GetPlaceholderAssetRegistryKey() { return "SourceAssetVersion"; }
+  using Base = AssetVersionStorage;
   std::string XMLFilename() const { return XMLFilename(GetRef()); }
   std::string WorkingDir(void) const { return WorkingDir(GetRef()); }
   std::string WorkingFileRef(const std::string &fname) const {
     return WorkingDir() + fname;
   }
 
-  // implemented in LoadAny.cpp
-  static khRefGuard<AssetVersionImpl> Load(const std::string &boundref);
 
-  virtual bool Save(const std::string &filename) const {
-    assert(false); // Can only save from sub-classes
-    return false;
-  };
+  virtual std::string GetName() const {   // Returns the name of the asset version, e.g., "CombinedRPAssetVersion"
+    assert(false);
+    return "";
+  }
+
+  // Note for future development: It would be good to change SerializeConfig to something like
+  // GetConfig that would fill out a list of key/value pairs instead of dealing with XML directly
+  virtual void SerializeConfig(khxml::DOMElement*) const {
+    assert(false);
+  }
 
   std::string WorkingFilename(const std::string &fname) const {
     return AssetDefs::AssetPathToFilename(WorkingFileRef(fname));
@@ -108,12 +136,34 @@ class AssetVersionImpl : public khRefCounter, public AssetVersionStorage, public
     return (state == AssetDefs::Bad);
   }
 
+  virtual bool InputStatesAffectMyState(AssetDefs::State stateByInputs, bool blockedByOfflineInputs) const {assert(false); return true;}
   const SharedString & GetRef(void) const { return name; }
   std::string GetAssetRef(void) const {
     AssetVersionRef verref(name);
     return verref.AssetRef();
   }
 
+  // determine amount of memory used by an AssetVersionImpl
+  virtual uint64 GetHeapUsage() const {
+    return ::GetHeapUsage(name)
+    + ::GetHeapUsage(type)
+    + ::GetHeapUsage(subtype)
+    + ::GetHeapUsage(state)
+    + ::GetHeapUsage(progress)
+    + ::GetHeapUsage(locked)
+    + ::GetHeapUsage(inputs)
+    + ::GetHeapUsage(children)
+    + ::GetHeapUsage(parents)
+    + ::GetHeapUsage(listeners)
+    + ::GetHeapUsage(outfiles)
+    + ::GetHeapUsage(meta)
+    + ::GetHeapUsage(beginTime)
+    + ::GetHeapUsage(progressTime)
+    + ::GetHeapUsage(endTime)
+    + ::GetHeapUsage(taskid)
+    + ::GetHeapUsage(timestamp)
+    + ::GetHeapUsage(filesize);
+  }
   template <class outIter>
   outIter GetInputs(outIter oi) const {
     for (const auto &i : inputs) {
@@ -126,12 +176,59 @@ class AssetVersionImpl : public khRefCounter, public AssetVersionStorage, public
   virtual void GetOutputFilenames(std::vector<std::string> &out) const = 0;
   virtual std::string GetOutputFilename(uint i) const = 0;
   virtual void AfterLoad(void) { }
+  virtual void DependentChildren(std::vector<SharedString> &) const {
+    // No-op in base class. Sub-classes will override this
+    // with children that must be operated on similarly to the
+    // parent asset (ex: parent is canceled, so these children
+    // must also be canceled.
+  }
+  virtual AssetDefs::State CalcStateByInputsAndChildren(const InputAndChildStateData &) const {
+    assert(false); // Can only call from sub-classes
+    return AssetDefs::Bad;
+  }
+  virtual AssetDefs::State OnStateChange(AssetDefs::State, AssetDefs::State) {
+    assert(false);
+    return AssetDefs::Bad;
+  }
+  virtual void WriteFatalLogfile(const std::string &, const std::string &) const throw() {
+    assert(false);
+  }
+  virtual void ResetOutFiles(const std::vector<std::string> &) {
+    assert(false);
+  }
+  virtual bool RecalcState(WaitingFor &) const {
+    assert(false);
+    return false;
+  }
+  virtual void SetAndPropagateState(AssetDefs::State) {
+    assert(false);
+  }
 
   // static helpers
   static std::string WorkingDir(const AssetVersionRef &ref);
   static std::string XMLFilename(const AssetVersionRef &ref) {
     return AssetDefs::AssetPathToFilename(WorkingDir(ref) +
                                           "khassetver.xml");
+  }
+  static std::string Filename(const std::string & ref) {
+    std::string boundref = AssetVersionRef::Bind(ref);
+    AssetVersionRef boundVerRef(boundref);
+    return AssetVersionImpl::XMLFilename(boundVerRef);
+  }
+  static std::string Key(const SharedString & ref) {
+    return AssetVersionRef::Bind(ref);
+  }
+  static bool ValidRef(const SharedString & ref) {
+    if (ref.empty())
+      return false;
+
+    // bind the ref
+    SharedString boundRef = AssetVersionRef::Bind(ref);
+    AssetVersionRef boundVerRef(boundRef);
+
+    if (boundVerRef.Version() == "0")
+      return false;
+    return true;
   }
 
   // Gets the database path, type and ref string for the given dbname.
@@ -195,7 +292,7 @@ inline StorageManager<AssetVersionImpl>&
 AssetVersion::storageManager(void)
 {
   static StorageManager<AssetVersionImpl> storageManager(
-      MiscConfig::Instance().VersionCacheSize, "version");
+      MiscConfig::Instance().VersionCacheSize, MiscConfig::Instance().LimitMemoryUtilization, MiscConfig::Instance().MaxVersionCacheMemorySize, MiscConfig::Instance().PrunePercentage, "version");
   return storageManager;
 }
 
@@ -204,16 +301,8 @@ inline bool AssetVersion::Valid(void) const {
   if (handle) {
     return handle->type != AssetDefs::Invalid;
   } else {
-    // deal quickly with an empty ref
-    if (ref.empty())
-      return false;
 
-    // bind the ref
-    SharedString boundRef = AssetVersionRef::Bind(ref);
-    AssetVersionRef boundVerRef(boundRef);
-
-    // deal quickly with an invalid version
-    if (boundVerRef.Version() == "0")
+    if (!AssetVersionImpl::ValidRef(ref))
       return false;
 
     try {
@@ -224,19 +313,6 @@ inline bool AssetVersion::Valid(void) const {
     return handle && (handle->type != AssetDefs::Invalid);
   }
 }
-
-template <>
-inline std::string AssetVersion::Filename() const {
-  std::string boundref = AssetVersionRef::Bind(ref);
-  AssetVersionRef boundVerRef(boundref);
-  return AssetVersionImpl::XMLFilename(boundVerRef);
-}
-
-template <>
-inline const SharedString AssetVersion::Key() const {
-  return AssetVersionRef::Bind(ref);
-}
-
 
 // ****************************************************************************
 // ***  LeafAssetVersionImpl
@@ -291,5 +367,8 @@ class CompositeAssetVersionImpl : public virtual AssetVersionImpl {
   std::string GetOutputFilename(uint i) const;
 };
 
+inline uint64 GetHeapUsage(const AssetVersionImpl &version) {
+  return version.GetHeapUsage();
+}
 
 #endif  // GEO_EARTH_ENTERPRISE_SRC_FUSION_AUTOINGEST_ASSETVERSION_H_

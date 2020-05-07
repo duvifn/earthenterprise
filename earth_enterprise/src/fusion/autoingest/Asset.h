@@ -22,6 +22,7 @@
 #include <khFileUtils.h>
 #include "MiscConfig.h"
 #include "StorageManager.h"
+#include "CacheSizeCalculations.h"
 
 /******************************************************************************
  ***  AssetImpl
@@ -36,7 +37,7 @@
  ***  ... = asset->config.layers.size();
  ***
  ******************************************************************************/
-class AssetImpl : public khRefCounter, public AssetStorage, public StorageManaged {
+class AssetImpl : public AssetStorage, public StorageManaged {
   friend class AssetHandle_<AssetImpl>;
 
   // Illegal to copy an AssetImpl
@@ -44,6 +45,9 @@ class AssetImpl : public khRefCounter, public AssetStorage, public StorageManage
   AssetImpl& operator=(const AssetImpl&) = delete;
   AssetImpl(const AssetImpl&&) = delete;
   AssetImpl& operator=(const AssetImpl&&) = delete;
+ public:
+  using Base = AssetStorage;
+  static std::string GetPlaceholderAssetRegistryKey() { return "SourceAsset"; }
 
  protected:
   // used by my intermediate derived classes since their calls to
@@ -53,13 +57,17 @@ class AssetImpl : public khRefCounter, public AssetStorage, public StorageManage
       AssetStorage(storage) { }
 
  public:
-  // implemented in LoadAny.cpp
-  static khRefGuard<AssetImpl> Load(const std::string &boundref);
 
-  virtual bool Save(const std::string &filename) const {
-    assert(false); // Can only save from sub-classes
-    return false;
-  };
+  virtual std::string GetName() const { // Returns the name of the asset, e.g., "CombinedRPAsset"
+    assert(false);
+    return "";
+  }
+
+  // Note for future development: It would be good to change SerializeConfig to something like
+  // GetConfig that would fill out a list of key/value pairs instead of dealing with XML directly
+  virtual void SerializeConfig(khxml::DOMElement*) const {
+    assert(false);
+  }
 
   std::string WorkingDir(void) const { return WorkingDir(GetRef()); }
   std::string XMLFilename() const { return XMLFilename(GetRef()); }
@@ -68,6 +76,17 @@ class AssetImpl : public khRefCounter, public AssetStorage, public StorageManage
   virtual ~AssetImpl(void) { }
   const SharedString & GetRef(void) const { return name; }
 
+  // determine amount of memory used by an AssetImpl
+  virtual uint64 GetHeapUsage() const {
+    return ::GetHeapUsage(name)
+    + ::GetHeapUsage(type)
+    + ::GetHeapUsage(subtype)
+    + ::GetHeapUsage(inputs)
+    + ::GetHeapUsage(meta)
+    + ::GetHeapUsage(versions)
+    + ::GetHeapUsage(timestamp)
+    + ::GetHeapUsage(filesize);
+  }
 
   std::string  GetLastGoodVersionRef(void) const;
   void GetInputFilenames(std::vector<std::string> &out) const;
@@ -76,6 +95,15 @@ class AssetImpl : public khRefCounter, public AssetStorage, public StorageManage
   // static helpers
   static std::string WorkingDir(const std::string &ref);
   static std::string XMLFilename(const std::string &ref);
+  static std::string Filename(const std::string &ref) {
+    return XMLFilename(ref);
+  }
+  static SharedString Key(const SharedString & ref) {
+    return ref;
+  }
+  static bool ValidRef(const SharedString & ref) {
+    return !ref.empty();
+  }
 };
 
 // ****************************************************************************
@@ -88,7 +116,7 @@ inline StorageManager<AssetImpl>&
 Asset::storageManager(void)
 {
   static StorageManager<AssetImpl> storageManager(
-      MiscConfig::Instance().AssetCacheSize, "asset");
+      MiscConfig::Instance().AssetCacheSize, MiscConfig::Instance().LimitMemoryUtilization, MiscConfig::Instance().MaxAssetCacheMemorySize, MiscConfig::Instance().PrunePercentage, "asset");
   return storageManager;
 }
 
@@ -99,8 +127,8 @@ Asset::Valid(void) const
   if (handle) {
     return handle->type != AssetDefs::Invalid;
   } else {
-    // deal quickly with an empty ref
-    if (ref.empty())
+
+    if (!AssetImpl::ValidRef(ref))
       return false;
 
     try {
@@ -112,12 +140,8 @@ Asset::Valid(void) const
   }
 }
 
-template <>
-inline std::string Asset::Filename() const {
-  return AssetImpl::XMLFilename(ref);
+inline uint64 GetHeapUsage(const AssetImpl &asset) {
+  return asset.GetHeapUsage();
 }
-
-template <> inline const SharedString Asset::Key() const { return ref; }
-
 
 #endif /* __Asset_h */

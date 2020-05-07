@@ -197,7 +197,7 @@ def rpmCommandFilter = {
 def findBuildNumber = {
     return (!openGeeVersionFile.exists() || project.hasProperty('buildOpenGee')) ?
         getOsPackageBuildFromOpenGeeVersion(GeeCommandLine.expand(
-                ["../src/scons/getversion.py", "--long"],
+                ["${projectDir}/../src/scons/getversion.py", "--long"],
                 "Failed to get Open GEE build!"
             )) :
         getOsPackageBuildFromOpenGeeVersionFile(openGeeVersionFile)
@@ -207,7 +207,7 @@ def findBuildNumber = {
 def findVersionNumber = {
     return (!openGeeVersionFile.exists() || project.hasProperty('buildOpenGee')) ?
         getOsPackageVersionFromOpenGeeVersion(GeeCommandLine.expand(
-                ["../src/scons/getversion.py", "--long"],
+                ["${projectDir}/../src/scons/getversion.py", "--long"],
                 "Failed to get Open GEE version!"
             )) :
         getOsPackageVersionFromOpenGeeVersionFile(openGeeVersionFile)
@@ -251,7 +251,7 @@ task openGeePostGisRpm(type: GeeRpm) {
 
     packageName = 'opengee-postgis'
     release = ospackage.release
-    version = '2.3.4'
+    version = '2.3.9'
     user = 'root'
     permissionGroup = 'root'
     packageGroup = 'Application/Productivity'
@@ -264,6 +264,9 @@ task openGeePostGisRpm(type: GeeRpm) {
     autoFindRequires = true
 
     requires('opengee-common', ospackage.version, GREATER | EQUAL)
+    // The code in GeeRpm decides that this RPM should depend on proj, but
+    // it actually depends on proj-devel.
+    requires('proj-devel')
 
     from (stagedInstallDir_postgis_opt) {
         into new File(packageInstallRootDir, 'opt')
@@ -385,6 +388,7 @@ task openGeeCommonRpm(type: GeeRpm, dependsOn: openGeeCommonInitScripts) {
         'OpenLDAP and ' +
         'OpenSSL and ' +
         'Skia 5.1.2'
+ 
     type = BINARY
     autoFindProvides = true
     autoFindRequires = true
@@ -394,6 +398,11 @@ task openGeeCommonRpm(type: GeeRpm, dependsOn: openGeeCommonInitScripts) {
     // chkconfig fails, so this dependency is explicit.
     requires('chkconfig')
     requires('shadow-utils')
+
+    if ("${findBuildNumber()}.${rpmPlatformString}".contains('el6')) {
+        requires('python27')
+        requires('python27-lxml')
+    }
 
     requiresCommands(packageSharedCommands +
         ['cat', 'cut', 'getent', 'grep'])
@@ -452,6 +461,7 @@ task openGeeCommonDeb (type: GeeDeb, dependsOn: openGeeCommonInitScripts) {
     requires('libxml2-utils')
     requires('openssl')
     requires('python-imaging')
+    requires('python-lxml')
     requires('python-psycopg2')
     requires('python-setuptools')
     requires('python2.7')
@@ -517,15 +527,13 @@ task openGeeServerRpm(type: GeeRpm, dependsOn: openGeeServerInitScripts) {
 
     requires('opengee-common', ospackage.version, GREATER | EQUAL)
     requiresPre('opengee-common', ospackage.version, GREATER | EQUAL)
-    requires('opengee-postgis', '2.3.4', GREATER | EQUAL)
+    requires('opengee-postgis', '2.3.9', GREATER | EQUAL)
     conflicts('opengee-postgis', '2.0', LESS )
     conflicts('opengee-postgis', '2.4', GREATER | EQUAL)
-    // `opengee-server` bundles Apache, and Apache requires utilities from the
-    // `initscripts` package:
-    requires('initscripts')
     requires('python-unittest2')
     // The WMS Service requires PIL, which is not automatically detected:
     requires('python-imaging')
+    requires('python-lxml')
 
     requiresCommands(
         packageSharedCommands +
@@ -554,16 +562,20 @@ task openGeeServerRpm(type: GeeRpm, dependsOn: openGeeServerInitScripts) {
     directory('/var/opt/google/pgsql/logs')
 
     filesMatching(
-        ['/etc/init.d/geserver']
-    ) {
+        '/etc/init.d/geserver')
+    {
         it.mode = 0755
     }
 
     // since these are "sourced" they cannot be exec...
     filesMatching(
-        ['/etc/profile.d/ge-server.csh',
-         '/etc/profile.d/ge-server.sh']
-    ) {
+        '/etc/profile.d/ge-server.csh')
+    {
+        it.mode = 0644
+    }
+    filesMatching(
+        '/etc/profile.d/ge-server.sh')
+    {
         it.mode = 0644
     }
 
@@ -616,11 +628,12 @@ task openGeeServerDeb (type: GeeDeb, dependsOn: openGeeServerInitScripts) {
     url = openGeeServerRpm.url
 
     requires('opengee-common', ospackage.version, GREATER | EQUAL)
-    requires('opengee-postgis', '2.3.4', GREATER | EQUAL)
+    requires('opengee-postgis', '2.3.9', GREATER | EQUAL)
     conflicts('opengee-postgis', '2.0', LESS )
     conflicts('opengee-postgis', '2.4', GREATER | EQUAL)
 
     requires('python-pil')
+    requires('python-lxml')
 
     requiresCommands(
         packageSharedCommands +
@@ -647,15 +660,19 @@ task openGeeServerDeb (type: GeeDeb, dependsOn: openGeeServerInitScripts) {
     directory('/var/opt/google/pgsql/logs')
 
     filesMatching(
-        ['/etc/init.d/geserver']
+        '/etc/init.d/geserver'
     ) {
         it.mode = 0755
     }
 
     // since these are "sourced" they cannot be exec...
     filesMatching(
-        ['/etc/profile.d/ge-server.csh',
-         '/etc/profile.d/ge-server.sh']
+        '/etc/profile.d/ge-server.csh'
+    ) {
+        it.mode = 0644
+    }
+    filesMatching(
+         '/etc/profile.d/ge-server.sh'
     ) {
         it.mode = 0644
     }
@@ -758,15 +775,19 @@ built from raster, vector, and location properties data.
     directory('/var/opt/google/log', 0775)
 
     filesMatching(
-        ['/etc/init.d/gefusion']
+        '/etc/init.d/gefusion'
     ) {
         it.mode = 0755
     }
 
     // since these are "sourced" they cannot be exec...
     filesMatching(
-        ['/etc/profile.d/ge-fusion.csh',
-         '/etc/profile.d/ge-fusion.sh']
+        '/etc/profile.d/ge-fusion.csh'
+    ) {
+        it.mode = 0644
+    }
+    filesMatching(
+        '/etc/profile.d/ge-fusion.sh'
     ) {
         it.mode = 0644
     }
@@ -827,15 +848,19 @@ task openGeeFusionDeb (type: GeeDeb, dependsOn: openGeeFusionInitScripts) {
     directory('/var/opt/google/log', 0775)
 
     filesMatching(
-        ['/etc/init.d/gefusion']
+        '/etc/init.d/gefusion'
     ) {
         it.mode = 0755
     }
 
     // since these are "sourced" they cannot be exec...
     filesMatching(
-        ['/etc/profile.d/ge-fusion.csh',
-         '/etc/profile.d/ge-fusion.sh']
+        '/etc/profile.d/ge-fusion.csh'
+    ) {
+        it.mode = 0644
+    }
+    filesMatching(
+        '/etc/profile.d/ge-fusion.sh'
     ) {
         it.mode = 0644
     }

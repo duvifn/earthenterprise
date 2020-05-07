@@ -18,15 +18,14 @@
 #ifndef __khCache_h
 #define __khCache_h
 
+#include <cctype>
+#include <chrono>
 #include <map>
 #include <vector>
 
 #include "khTypes.h"
-
-// #define SUPPORT_VERBOSE
-#ifdef SUPPORT_VERBOSE
-#include <notify.h>
-#endif
+#include "CacheSizeCalculations.h"
+#include "notify.h"
 
 /******************************************************************************
  ***  Simple cache of refcounted objects
@@ -34,13 +33,13 @@
  ***  Key can be anything that supports less<T> and has value semantics
  ***  Value must act like a refcounting handle(like khRefGuard & khSharedHandle)
  ***     - must have value semantics
- ***     - must supply refcount() member function
+ ***     - must supply use_count() member function
  ***
  ***  You can Add, Remove & Find in the cache.
  ***  The targetMax is the max size it tries to maintain. But it can be bigger
- ***      if all the values have a refcount > 1
+ ***      if all the values have a use_count > 1
  ***  The refcounting handle semantics makes the pinning & unpinning automatic
- ***  A value with a refcount > 1 (because other handles to the same object
+ ***  A value with a use_count > 1 (because other handles to the same object
  ***      exist somewhere) will never be removed from the cache.
  ***  Oldest items (Added or Found the longest ago) will be removed first.
  ***
@@ -62,8 +61,9 @@ class khCacheItem {
   khCacheItem *prev;
   Key   key;
   Value val;
+  uint64 size;
   khCacheItem(const Key &key_, const Value &val_)
-      : next(0), prev(0), key(key_), val(val_) { }
+      : next(0), prev(0), key(key_), val(val_), size(0) { }
 };
 
 // #define CHECK_INVARIANTS
@@ -72,15 +72,20 @@ template <class Key, class Value>
 class khCache {
   typedef khCacheItem<Key, Value> Item;
   typedef std::map<Key, Item*> MapType;
+  using TimePoint = std::chrono::time_point<std::chrono::high_resolution_clock>;
   MapType map;
   Item *head;
   Item *tail;
+  static const khNotifyLevel PURGE_TIME_NOTIFY_LEVEL = NFY_DEBUG;
   const uint targetMax;
+  const std::string name;
 #ifdef SUPPORT_VERBOSE
   bool verbose;
 #endif
-  uint numItems;
-
+  uint64 cacheMemoryUse;
+  bool limitCacheMemory;
+  uint64 maxCacheMemory;
+  const uint64 khCacheItemSize = sizeof(khCacheItem<Key, Value>);
   bool InList(Item *item) {
     Item *tmp = head;
     while (tmp) {
@@ -135,7 +140,6 @@ class khCache {
       item->next->prev = item;
     else
       tail = item;
-    ++numItems;
   }
   void Unlink(Item *item) {
     if (item->prev)
@@ -148,7 +152,6 @@ class khCache {
       tail = item->prev;
     item->next = 0;
     item->prev = 0;
-    --numItems;
   }
   Item* FindItem(const Key& key) {
     typename MapType::const_iterator found = map.find(key);
@@ -158,27 +161,61 @@ class khCache {
       return 0;
     }
   }
+  bool TooManyObjects() {
+    return (map.size() > targetMax) && !limitCacheMemory;
+  }
+  bool TooMuchMemory() {
+    return (cacheMemoryUse > maxCacheMemory) && limitCacheMemory;
+  }
 
  public:
   typedef typename MapType::size_type size_type;
   size_type size(void) const { return map.size(); }
   size_type capacity(void) const { return targetMax; }
+  uint64 getMemoryUse(void) const { return cacheMemoryUse; }
 
-  khCache(uint targetMax_
+  khCache(uint targetMax_, std::string name_
 #ifdef SUPPORT_VERBOSE
           , bool verbose_ = false
 #endif
           ) : head(0), tail(0), targetMax(targetMax_),
+              name(name_.replace(0, 1, 1, std::toupper(name_[0]))), // Make the first letter upper case for pretty notify statements
 #ifdef SUPPORT_VERBOSE
               verbose(verbose_),
 #endif
-              numItems(0)
+              cacheMemoryUse(0),
+              limitCacheMemory(false)
 
   {
     CheckListInvariant();
   }
   ~khCache(void) {
     clear();
+  }
+  // returns the size of a cache item if it exists
+  uint64 getCacheItemSize(const Key &key) {
+    Item *item = FindItem(key);
+    if (item) {
+      return item->size;
+    }
+    return 0;
+  }
+  // calculates the current size of a cache item
+  uint64 calculateCacheItemSize(Item *item) {
+    return khCacheItemSize + GetHeapUsage(item->key) + GetHeapUsage(item->val);
+  }
+  // sets a given cache item's size to its current size and updates the total cache memory in use
+  void updateCacheItemSize(const Key &key) {
+    Item *item = FindItem(key);
+    if ( item ) {
+      uint64 size = calculateCacheItemSize(item);
+      cacheMemoryUse = (cacheMemoryUse - item->size) + size;
+      item->size = size;
+    }
+  }
+  void setCacheMemoryLimit(bool enabled, uint64 maxMemory) {
+    limitCacheMemory = enabled;
+    maxCacheMemory = maxMemory;
   }
   void clear(void) {
     CheckListInvariant();
@@ -190,6 +227,7 @@ class khCache {
     }
     map.clear();
     head = tail = 0;
+    cacheMemoryUse = 0;
   }
   void Add(const Key &key, const Value &val, bool prune = true) {
     CheckListInvariant();
@@ -201,6 +239,7 @@ class khCache {
 #ifdef SUPPORT_VERBOSE
       if (verbose) notify(NFY_ALWAYS, "Deleting previous %s from cache", key.c_str());
 #endif
+      cacheMemoryUse -= item->size;
       delete item;
     }
 
@@ -208,6 +247,8 @@ class khCache {
     item = new Item(key, val);
     Link(item);
     map[key] = item;
+    item->size = calculateCacheItemSize(item);
+    cacheMemoryUse += item->size;
 #ifdef SUPPORT_VERBOSE
     if (verbose) notify(NFY_ALWAYS, "Adding %s to cache", key.c_str());
 #endif
@@ -230,6 +271,7 @@ class khCache {
 #ifdef SUPPORT_VERBOSE
       if (verbose) notify(NFY_ALWAYS, "Removing %s from cache", key.c_str());
 #endif
+      cacheMemoryUse -= item->size;
       delete item;
     }
 
@@ -258,13 +300,14 @@ class khCache {
   }
 
   void Prune(void) {
+    TimePoint startTime = std::chrono::high_resolution_clock::now();
     CheckListInvariant();
     Item *item = tail;
-    while (item && (map.size() > targetMax)) {
-      // Note: this refcount() > 1 check is safe even with
+    while (item && ( TooMuchMemory() || TooManyObjects() )) {
+      // Note: this use_count() > 1 check is safe even with
       // khMTRefCounter based guards. See explanaition with the
       // definition of khMTRefCounter in khMTTypes.h.
-      while (item && (item->val.refcount() > 1)) {
+      while (item && (item->val.use_count() > 1)) {
         item = item->prev;
       }
       if (item) {
@@ -275,10 +318,35 @@ class khCache {
 #ifdef SUPPORT_VERBOSE
         if (verbose) notify(NFY_ALWAYS, "Pruning %s from cache", tokill->key.c_str());
 #endif
+        cacheMemoryUse -= tokill->size;
         delete tokill;
       }
     }
     CheckListInvariant();
+    TimePoint finishTime = std::chrono::high_resolution_clock::now();
+    // Log when the cache size is exceeded
+    if (getNotifyLevel() >= PURGE_TIME_NOTIFY_LEVEL &&
+        (TooMuchMemory() || TooManyObjects())) {
+      LogPruneTime(startTime, finishTime);
+    }
+  }
+ private:
+  void LogPruneTime(TimePoint startTime, TimePoint finishTime) {
+    std::chrono::duration<double> elapsedTime = finishTime - startTime;
+    uint64 configuredSize, actualSize;
+    std::string units;
+    if (limitCacheMemory) {
+      configuredSize = maxCacheMemory;
+      actualSize = cacheMemoryUse;
+      units = "bytes";
+    }
+    else {
+      configuredSize = targetMax;
+      actualSize = map.size();
+      units = "items";
+    }
+    notify(PURGE_TIME_NOTIFY_LEVEL, "%s cache size exceeded. Configured size: %lu %s, Actual size: %lu %s, Prune time: %f seconds",
+           name.c_str(), configuredSize, units.c_str(), actualSize, units.c_str(), elapsedTime.count());
   }
 
 };
