@@ -109,6 +109,10 @@ const std::string kDefaultKey(
 
 
 void Encode(void* data, uint32 datalen, const void* key, uint32 keylen) {
+  if (keylen % 8 != 0) {
+    throw khSimpleException("Encryption keys must be a multiple of 8 bytes long.");
+  }
+
   uint8* outdata = static_cast<uint8*>(data);
 
   uint8* dp = static_cast<uint8*>(data);
@@ -150,7 +154,7 @@ void Encode(void* data, uint32 datalen, const void* key, uint32 keylen) {
 
   /* now the remaining 1 to 7 bytes */
   if (dp < dpend) {
-    if (kp >= kpend) {
+    while (kp >= kpend) {
       // rotate the key one last time (if necessary)
       off = (off + 8) % 24;
       kp = kpstart + off;
