@@ -130,7 +130,7 @@ else:
         '--with-xml2 '
         '--without-pg --without-jasper --with-odbc=no --without-mysql '
         '--with-jp2mrsid=no --without-grass --with-oci=no --with-gif=internal '
-        '--with-ecw=no --with-curl --with-pic --without-sqlite3\n'
+        '--with-ecw=no --with-curl --with-pic --with-sqlite3\n'
         'touch %s' % (
             build_root,
             gdal_env['ENV']['mod_env'], optdir,
